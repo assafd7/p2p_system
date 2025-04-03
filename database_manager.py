@@ -39,7 +39,7 @@ class DatabaseManager:
         )
         ''')
 
-        # Create shared_files table (for future use)
+        # Create shared_fidles table (for future use)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS shared_files (
             share_id INTEGER PRIMARY KEY AUTOINCREMENT,
