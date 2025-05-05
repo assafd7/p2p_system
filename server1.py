@@ -8,7 +8,7 @@ from login_interface import LoginInterface
 class P2PServer:
     """Manages the P2P server operations including client connections and request handling."""
     
-    def __init__(self, host='127.0.0.1', port=9000, db_name='p2p_system.db'):
+    def __init__(self, host='0.0.0.0', port=9000, db_name='p2p_system.db'):
         self.host = host
         self.port = port
         self.db_manager = DatabaseManager(db_name)
@@ -100,7 +100,7 @@ class P2PServer:
 class P2PClient:
     """Example client to test the P2P server."""
     
-    def __init__(self, host='127.0.0.1', port=9000):
+    def __init__(self, host='0.0.0.0', port=9000):
         self.host = host
         self.port = port
         self.client_socket = None

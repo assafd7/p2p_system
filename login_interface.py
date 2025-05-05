@@ -9,7 +9,7 @@ import main_app
 
 
 class LoginInterface:
-    def __init__(self, root_prm, host='127.0.0.1', port=9000):
+    def __init__(self, root_prm, host='0.0.0.0', port=9000):
         self.root = root_prm
         print(root_prm)
         self.host = host

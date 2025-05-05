@@ -72,7 +72,7 @@ class P2PProtocol:
         # Initialize instance variables
         self.host = host
         self.port = port
-        self.bootstrap_nodes = bootstrap_nodes or [('127.0.0.1', 9001)]
+        self.bootstrap_nodes = bootstrap_nodes or [('0.0.0.0', 9001)]  # Default to all interfaces for testing
         self.peers: Dict[Tuple[str, int], float] = {}
         self.shared_files: Dict[str, Dict] = {}
         self.local_files: Dict[str, Dict] = {}
