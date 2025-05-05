@@ -2,6 +2,7 @@ import socket
 import threading
 import json
 from database_manager import DatabaseManager
+from login_interface import LoginInterface
 
 
 class P2PServer:
@@ -145,23 +146,22 @@ class P2PClient:
             self.client_socket = None
 
 
-def run_example_client():
-    """Run an example client to test the server."""
-    client = P2PClient().connect()
-    
-    # register new user
-    register_response = client.register('testuser', 'password123', 'test@example.com')
-    print(f"Register response: {register_response}")
-    
-    # Example: Login
-    login_response = client.login('testuser', 'password123')
-    print(f"Login response: {login_response}")
-    
-    client.close()
+# def run_example_client():
+#     """Run an example client to test the server."""
+#     client = P2PClient().connect()
+#
+#     # register new user
+#     register_response = client.register('testuser', 'password123', 'test@example.com')
+#     print(f"Register response: {register_response}")
+#
+#     # Example: Login
+#     login_response = client.login('testuser', 'password123')
+#     print(f"Login response: {login_response}")
+#
+#     client.close()
 
 
 if __name__ == "__main__":
-    # Start the server
     server = P2PServer()
     server.start()
-    
+

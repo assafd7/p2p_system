@@ -26,7 +26,7 @@ class DatabaseManager:
         )
         ''')
 
-        # Create files index table (for future use)
+        # Create files table
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS files (
             file_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,7 +39,7 @@ class DatabaseManager:
         )
         ''')
 
-        # Create shared_fidles table (for future use)
+        # Create shared_files table (for future use)
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS shared_files (
             share_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -77,7 +77,6 @@ class DatabaseManager:
             conn.close()
             return True
         except sqlite3.IntegrityError:
-            # Username or email already exists
             conn.close()
             return False
         except Exception as e:
@@ -101,7 +100,6 @@ class DatabaseManager:
             result = cursor.fetchone()
 
             if result:
-                # Update last login time
                 cursor.execute(
                     "UPDATE users SET last_login = ? WHERE user_id = ?",
                     (datetime.now().isoformat(), result[0])
@@ -115,3 +113,54 @@ class DatabaseManager:
             conn.close()
             return False
 
+    def get_user_id(self, username):
+        """Return the user_id for the given username."""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM users WHERE username = ?", (username,))
+            result = cursor.fetchone()
+            conn.close()
+            if result:
+                return result[0]
+            else:
+                return None
+        except Exception as e:
+            print(f"Error getting user id: {e}")
+            conn.close()
+            return None
+
+    def register_file(self, filename, file_hash, file_size, owner_id):
+        """Register a file in the database."""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            created_at = datetime.now().isoformat()
+            cursor.execute(
+                "INSERT INTO files (filename, file_hash, file_size, owner_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                (filename, file_hash, file_size, owner_id, created_at)
+            )
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            print(f"Error registering file: {e}")
+            conn.close()
+            return False
+
+    def search_files(self, query):
+        """Search for files by filename using a simple LIKE query."""
+        try:
+            conn = sqlite3.connect(self.db_name)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT file_id, filename, file_hash, file_size, owner_id, created_at FROM files WHERE filename LIKE ?",
+                ('%' + query + '%',)
+            )
+            results = cursor.fetchall()
+            conn.close()
+            return results
+        except Exception as e:
+            print(f"Error searching files: {e}")
+            conn.close()
+            return []

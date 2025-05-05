@@ -1,0 +1,7 @@
+# Core dependencies
+tkinter>=8.6  # Usually comes with Python
+sqlite3>=3.0  # Usually comes with Python
+
+# Additional dependencies
+cryptography>=3.4  # For secure file hashing
+pillow>=8.0  # For image handling in the UI 
