@@ -54,8 +54,7 @@ class P2PProtocol:
     # Initialization and Cleanup
     # =========================================================================
     
-    def __init__(self, host: str = '0.0.0.0', port: int = 9001, 
-                 bootstrap_nodes: List[Tuple[str, int]] = None):
+    def __init__(self, host: str = '0.0.0.0', port: int = 9001, bootstrap_nodes: List[Tuple[str, int]] = None):
         """
         Initialize the P2P protocol.
         
@@ -72,7 +71,8 @@ class P2PProtocol:
         # Initialize instance variables
         self.host = host
         self.port = port
-        self.bootstrap_nodes = bootstrap_nodes or [('0.0.0.0', 9001)]  # Default to all interfaces for testing
+        # Use the actual IP address for bootstrap nodes
+        self.bootstrap_nodes = bootstrap_nodes or [(host if host != '0.0.0.0' else '127.0.0.1', 9001)]
         self.peers: Dict[Tuple[str, int], float] = {}
         self.shared_files: Dict[str, Dict] = {}
         self.local_files: Dict[str, Dict] = {}
@@ -179,6 +179,10 @@ class P2PProtocol:
             'files': {hash: info['name'] for hash, info in self.local_files.items()}
         }
         self.discovery_socket.sendto(json.dumps(response).encode('utf-8'), addr)
+        
+        # Also send our own hello message to ensure bidirectional connection
+        hello_msg = {'type': 'hello'}
+        self.discovery_socket.sendto(json.dumps(hello_msg).encode('utf-8'), addr)
     
     def _handle_hello_response(self, addr: Tuple[str, int], message: dict):
         """Handle a hello response from a peer"""
@@ -238,130 +242,148 @@ class P2PProtocol:
         
         file_name = os.path.basename(file_path)
         self.local_files[file_hash] = {'path': file_path, 'name': file_name}
+        
+        # Announce the file to all peers
         self._announce_file(file_hash, file_name)
+        
+        # Also add it to our own shared files
+        if file_hash not in self.shared_files:
+            self.shared_files[file_hash] = {'peers': [], 'name': file_name}
+        if (self.host, self.port) not in self.shared_files[file_hash]['peers']:
+            self.shared_files[file_hash]['peers'].append((self.host, self.port))
+        
         logger.info(f"Shared file {file_name} ({file_hash})")
         return file_hash
     
     def request_file(self, file_hash: str, save_as: str = None) -> str:
-        """Request a file from peers and return the local path"""
+        """Request a file from the network and return the path where it was saved"""
         assert isinstance(file_hash, str), "File hash must be a string"
-        assert save_as is None or isinstance(save_as, str), "Save as name must be a string or None"
+        assert file_hash in self.shared_files, f"File with hash {file_hash} not found in network"
         
-        if file_hash in self.local_files:
-            return self.local_files[file_hash]['path']
-        
-        if file_hash not in self.shared_files or not self.shared_files[file_hash]['peers']:
-            raise ValueError(f"File not found in network: {file_hash}")
+        # Get list of peers that have this file
+        peers = self.shared_files[file_hash]['peers']
+        if not peers:
+            raise Exception("No peers available with this file")
         
         # Try to download from each peer until successful
-        for peer in self.shared_files[file_hash]['peers']:
+        last_error = None
+        for peer in peers:
             try:
-                file_path = self._download_from_peer(peer, file_hash, save_as)
-                return file_path
+                return self._download_from_peer(peer, file_hash, save_as)
             except Exception as e:
-                logger.error(f"Error downloading from {peer}: {e}")
-                continue
+                last_error = e
+                logger.error(f"Failed to download from peer {peer}: {e}")
         
-        raise Exception("Failed to download file from any peer")
+        raise Exception(f"Failed to download file from any peer: {last_error}")
     
     def _download_from_peer(self, peer: Tuple[str, int], file_hash: str, save_as: str = None) -> str:
         """Download a file from a specific peer"""
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_socket.connect((peer[0], peer[1] + 1))  # Connect to transfer port
+        assert isinstance(peer, tuple) and len(peer) == 2, "Peer must be a tuple of (host, port)"
+        assert isinstance(file_hash, str), "File hash must be a string"
         
-        request = {
-            'type': 'request_file',
-            'file_hash': file_hash
-        }
-        client_socket.send(json.dumps(request).encode('utf-8'))
+        # Create a TCP connection to the peer
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.connect(peer)
         
-        file_name = save_as if save_as else self.shared_files[file_hash]['name']
-        file_path = os.path.join('downloads', file_name)
-        os.makedirs('downloads', exist_ok=True)
-        
-        logger.info(f"Downloading file {file_name} ({file_hash}) from {peer}")
-        with open(file_path, 'wb') as f:
-            while True:
-                data = client_socket.recv(8192)
-                if not data:
-                    break
-                f.write(data)
-        
-        self.local_files[file_hash] = {'path': file_path, 'name': file_name}
-        return file_path
+        try:
+            # Send file request
+            request = {
+                'type': 'file_request',
+                'file_hash': file_hash
+            }
+            sock.sendall(json.dumps(request).encode('utf-8'))
+            
+            # Receive file data
+            response = json.loads(sock.recv(1024).decode('utf-8'))
+            if response['type'] != 'file_data':
+                raise Exception(f"Unexpected response type: {response['type']}")
+            
+            # Create save directory if it doesn't exist
+            save_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'P2P_Files')
+            os.makedirs(save_dir, exist_ok=True)
+            
+            # Determine save path
+            if save_as is None:
+                save_as = self.shared_files[file_hash]['name']
+            save_path = os.path.join(save_dir, save_as)
+            
+            # Receive and save file
+            with open(save_path, 'wb') as f:
+                while True:
+                    data = sock.recv(8192)
+                    if not data:
+                        break
+                    f.write(data)
+            
+            # Verify file hash
+            with open(save_path, 'rb') as f:
+                received_hash = hashlib.sha256(f.read()).hexdigest()
+            
+            if received_hash != file_hash:
+                os.remove(save_path)
+                raise Exception("File hash verification failed")
+            
+            return save_path
+            
+        finally:
+            sock.close()
     
     def _transfer_loop(self):
-        """Handle file transfer requests"""
+        """Handle incoming file transfer requests"""
         while self.running:
             try:
                 client_socket, addr = self.transfer_socket.accept()
                 threading.Thread(target=self._handle_transfer_request, 
                                args=(client_socket, addr)).start()
             except Exception as e:
-                logger.error(f"Error in transfer loop: {e}")
+                if self.running:
+                    logger.error(f"Error in transfer loop: {e}")
     
     def _handle_transfer_request(self, client_socket: socket.socket, addr: Tuple[str, int]):
-        """Handle a single file transfer request"""
+        """Handle an incoming file transfer request"""
         try:
-            request = json.loads(client_socket.recv(1024).decode('utf-8'))
+            # Receive request
+            data = client_socket.recv(1024)
+            if not data:
+                return
+            
+            request = json.loads(data.decode('utf-8'))
             assert 'type' in request, "Request must have a type field"
             
-            if request['type'] == 'request_file':
+            if request['type'] == 'file_request':
                 self._handle_file_request(client_socket, addr, request)
-            elif request['type'] == 'send_file':
-                self._handle_file_receive(client_socket, addr, request)
+            else:
+                logger.error(f"Unknown request type: {request['type']}")
         
         except Exception as e:
-            logger.error(f"Error handling transfer request: {e}")
-        
+            logger.error(f"Error handling transfer request from {addr}: {e}")
         finally:
             client_socket.close()
     
-    def _handle_file_request(self, client_socket: socket.socket, addr: Tuple[str, int], 
-                           request: dict):
-        """Handle a request to send a file"""
-        assert 'file_hash' in request, "Request file message must include file_hash"
-        file_hash = request['file_hash']
-        
-        if file_hash in self.local_files:
-            file_path = self.local_files[file_hash]['path']
-            logger.info(f"Sending file {self.local_files[file_hash]['name']} ({file_hash}) to {addr}")
-            with open(file_path, 'rb') as f:
-                while True:
-                    data = f.read(8192)
-                    if not data:
-                        break
-                    client_socket.send(data)
-    
-    def _handle_file_receive(self, client_socket: socket.socket, addr: Tuple[str, int], 
-                           request: dict):
-        """Handle receiving a file"""
-        assert 'file_hash' in request, "Send file message must include file_hash"
-        assert 'file_name' in request, "Send file message must include file_name"
-        assert 'file_size' in request, "Send file message must include file_size"
+    def _handle_file_request(self, client_socket: socket.socket, addr: Tuple[str, int], request: dict):
+        """Handle a file request from a peer"""
+        assert 'file_hash' in request, "File request must include file_hash"
         
         file_hash = request['file_hash']
-        file_name = request['file_name']
-        file_size = request['file_size']
-        file_path = os.path.join('downloads', file_name)
+        if file_hash not in self.local_files:
+            response = {'type': 'error', 'message': 'File not found'}
+            client_socket.sendall(json.dumps(response).encode('utf-8'))
+            return
         
-        os.makedirs('downloads', exist_ok=True)
-        logger.info(f"Receiving file {file_name} ({file_hash}) from {addr}")
+        # Send file data response
+        response = {'type': 'file_data'}
+        client_socket.sendall(json.dumps(response).encode('utf-8'))
         
-        with open(file_path, 'wb') as f:
-            remaining = file_size
-            while remaining > 0:
-                data = client_socket.recv(min(8192, remaining))
+        # Send file contents
+        with open(self.local_files[file_hash]['path'], 'rb') as f:
+            while True:
+                data = f.read(8192)
                 if not data:
                     break
-                f.write(data)
-                remaining -= len(data)
-        
-        self.local_files[file_hash] = {'path': file_path, 'name': file_name}
-        self._announce_file(file_hash, file_name)
+                client_socket.sendall(data)
     
     def _announce_file(self, file_hash: str, file_name: str):
-        """Announce a new file to all known peers"""
+        """Announce a file to all peers"""
         assert isinstance(file_hash, str), "File hash must be a string"
         assert isinstance(file_name, str), "File name must be a string"
         
@@ -374,6 +396,14 @@ class P2PProtocol:
         for peer in self.peers:
             try:
                 self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), peer)
-                logger.info(f"Announced file {file_name} ({file_hash}) to {peer}")
+                logger.info(f"Announced file {file_name} ({file_hash}) to peer {peer}")
             except Exception as e:
-                logger.error(f"Error announcing file to {peer}: {e}") 
+                logger.error(f"Error announcing file to peer {peer}: {e}")
+        
+        # Also announce to bootstrap nodes
+        for node in self.bootstrap_nodes:
+            try:
+                self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), node)
+                logger.info(f"Announced file {file_name} ({file_hash}) to bootstrap node {node}")
+            except Exception as e:
+                logger.error(f"Error announcing file to bootstrap node {node}: {e}") 

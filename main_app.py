@@ -14,7 +14,7 @@ class MainApplication:
         self.root.geometry("800x600")
         
         # Initialize P2P protocol
-        self.p2p = P2PProtocol(port=9001)
+        self.p2p = P2PProtocol(host='0.0.0.0', port=9001)
         
         # Create menu bar
         self.menu_bar = tk.Menu(root)
@@ -118,18 +118,24 @@ class MainApplication:
         except Exception as e:
             print(f"Error updating status: {e}")
             self.root.after(5000, self.update_status)
-    
+
     def upload_file(self):
-        """Handle file upload"""
+        """Upload a file to share"""
         file_path = filedialog.askopenfilename()
-        if file_path:
-            try:
-                file_hash = self.p2p.share_file(file_path)
-                messagebox.showinfo("Success", f"File shared successfully!\nHash: {file_hash}")
-                self.update_status()
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to share file: {str(e)}")
-    
+        if not file_path:
+            return
+        
+        try:
+            # Share the file using P2P protocol
+            file_hash = self.p2p.share_file(file_path)
+            messagebox.showinfo("Success", f"File shared successfully!\nHash: {file_hash}")
+            
+            # Refresh the file list
+            self.refresh_shared_files()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to share file: {str(e)}")
+
     def download_file(self):
         """Handle file download"""
         selected_item = self.files_tree.selection()
@@ -154,7 +160,7 @@ class MainApplication:
                 messagebox.showinfo("Success", f"File downloaded successfully!\nSaved as: {file_path}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to download file: {str(e)}")
-    
+
     def search_files(self):
         """Handle file search"""
         search_dialog = tk.Toplevel(self.root)
@@ -252,14 +258,29 @@ class MainApplication:
         ttk.Button(details_dialog, text="Download", command=download_file).pack(pady=10)
     
     def refresh_peers(self):
-        """Refresh the peer list"""
-        self.p2p.discover_peers()
-        self.update_status()
+        """Refresh the list of connected peers"""
+        try:
+            self.p2p.discover_peers()
+            self.update_status()
+            messagebox.showinfo("Success", "Peer list refreshed successfully")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to refresh peers: {str(e)}")
+    
+    def refresh_shared_files(self):
+        """Refresh the list of shared files"""
+        try:
+            self.update_status()
+            messagebox.showinfo("Success", "File list refreshed successfully")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to refresh files: {str(e)}")
     
     def on_closing(self):
         """Handle application closing"""
-        if messagebox.askokcancel("Quit", "Do you want to quit?"):
+        try:
             self.p2p.stop()
+            self.root.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", f"Error during shutdown: {str(e)}")
             self.root.destroy()
 
 if __name__ == "__main__":

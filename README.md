@@ -1,21 +1,23 @@
 # P2P File Sharing System
 
-A peer-to-peer file sharing system that allows users to share and download files directly between peers.
+A peer-to-peer file sharing system that allows users to share and download files directly between peers without a central server.
 
 ## Features
 
-- User authentication (login/register)
-- File browsing and management
-- P2P file sharing
-- Peer discovery
-- File search across the network
-- Real-time status updates
+- User authentication and account management
+- Real-time peer discovery
+- File sharing and downloading
+- File search functionality
+- Secure file transfer with hash verification
+- Modern and intuitive user interface
 
 ## Requirements
 
-- Python 3.6 or higher
-- tkinter (usually comes with Python)
-- SQLite3 (usually comes with Python)
+- Python 3.7 or higher
+- Required Python packages (install using `pip install -r requirements.txt`):
+  - tkinter
+  - pathlib
+  - typing
 
 ## Installation
 
@@ -25,54 +27,56 @@ git clone <repository-url>
 cd p2p_project
 ```
 
-2. Install the required dependencies:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-1. Start the server:
+1. Start the application:
 ```bash
-python server1.py
+python main_app.py
 ```
 
-2. Start the client application:
-```bash
-python login_interface.py
-```
+2. Log in with your credentials or create a new account.
 
-3. Log in with your credentials or register a new account.
+3. Main Features:
+   - **Upload File**: Click "File" -> "Upload File" to share a file with the network
+   - **Download File**: Double-click on a file in the list or use "File" -> "Download File"
+   - **Search Files**: Use "File" -> "Search Files" to find specific files
+   - **Refresh**: Click the "Refresh" button to update the peer and file lists
 
-4. Use the interface to:
-   - Browse and manage local files
-   - Share files with other peers
-   - Search for files in the network
-   - Download files from other peers
+4. File Management:
+   - Shared files are stored in your local files
+   - Downloaded files are saved to `~/Downloads/P2P_Files/`
+   - File integrity is verified using SHA-256 hashing
 
-## Architecture
+## Network Protocol
 
-The system consists of several components:
-
-1. **Server (`server1.py`)**: Handles user authentication and peer coordination.
-2. **Client Application (`main_app.py`)**: Provides the user interface and file management.
-3. **P2P Protocol (`p2p_protocol.py`)**: Implements the peer-to-peer file sharing protocol.
-4. **File List Component (`files_index.py`)**: Manages the file browser interface.
-5. **Database Manager (`database_manager.py`)**: Handles user data storage.
-
-## P2P Protocol
-
-The P2P protocol uses:
-- UDP for peer discovery
-- TCP for file transfers
-- JSON for message formatting
-- SHA-256 for file hashing
+The system uses a custom P2P protocol for:
+- Peer discovery (UDP)
+- File transfer (TCP)
+- File announcements
+- Network status updates
 
 ## Security
 
-- User authentication is required to access the system
+- File integrity is verified using SHA-256 hashing
+- User authentication is required for all operations
 - File transfers are direct between peers
-- File integrity is verified using SHA-256 hashes
+
+## Troubleshooting
+
+1. If peers are not discovered:
+   - Check your network connection
+   - Ensure the application is not blocked by a firewall
+   - Try clicking the "Refresh" button
+
+2. If file transfers fail:
+   - Verify that the source peer is still online
+   - Check available disk space
+   - Ensure you have write permissions in the download directory
 
 ## Contributing
 
