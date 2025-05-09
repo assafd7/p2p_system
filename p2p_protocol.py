@@ -21,7 +21,7 @@ def setup_logging():
     
     # Create a logger
     logger = logging.getLogger('p2p_protocol')
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)  # Changed to DEBUG for more detailed logging
     
     # Remove any existing handlers to prevent duplicate logging
     for handler in logger.handlers[:]:
@@ -29,9 +29,6 @@ def setup_logging():
     
     # Create handlers
     console_handler = logging.StreamHandler()
-    file_handler = logging.FileHandler(log_dir / 'p2p.log')
-    
-    # Set log rotation to prevent huge log files
     file_handler = logging.handlers.RotatingFileHandler(
         log_dir / 'p2p.log',
         maxBytes=1024*1024,  # 1MB
@@ -39,7 +36,7 @@ def setup_logging():
     )
     
     # Create formatters and add it to handlers
-    log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    log_format = logging.Formatter('%(asctime)s - %(levelname)s - [%(funcName)s] - %(message)s')
     console_handler.setFormatter(log_format)
     file_handler.setFormatter(log_format)
     
@@ -71,6 +68,10 @@ class RateLimitedLogger:
         
         return False
     
+    def debug(self, message):
+        if self._should_log(message):
+            self.logger.debug(message)
+    
     def info(self, message):
         if self._should_log(message):
             self.logger.info(message)
@@ -97,14 +98,8 @@ class P2PProtocol:
     # =========================================================================
     
     def __init__(self, host='0.0.0.0', port=9001, bootstrap_nodes: List[Tuple[str, int]] = None):
-        """
-        Initialize the P2P protocol.
+        logger.debug(f"Initializing P2P Protocol with host={host}, port={port}, bootstrap_nodes={bootstrap_nodes}")
         
-        Args:
-            host: The host address to bind to
-            port: The port to listen on
-            bootstrap_nodes: List of known peers to connect to initially
-        """
         # Input validation
         assert isinstance(host, str), "Host must be a string"
         assert isinstance(port, int) and 1024 <= port <= 65535, "Port must be an integer between 1024 and 65535"
@@ -113,12 +108,14 @@ class P2PProtocol:
         # Get the actual IP address if host is 0.0.0.0
         if host == '0.0.0.0':
             self.host = self._get_local_ip()
+            logger.debug(f"Got local IP: {self.host}")
         else:
             self.host = host
             
         self.port = port
-        # Use the actual IP address for bootstrap nodes
-        self.bootstrap_nodes = bootstrap_nodes or [(self.host, 9001)]
+        self.bootstrap_nodes = bootstrap_nodes or []
+        logger.debug(f"Using bootstrap nodes: {self.bootstrap_nodes}")
+        
         self.peers: Dict[Tuple[str, int], float] = {}
         self.shared_files: Dict[str, Dict] = {}
         self.local_files: Dict[str, Dict] = {}
@@ -135,25 +132,38 @@ class P2PProtocol:
         logger.info(f"P2P Protocol initialized on {self.host}:{self.port}")
     
     def _setup_sockets(self):
-        """Set up UDP and TCP sockets for peer discovery and file transfers"""
-        # UDP socket for peer discovery
-        self.discovery_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.discovery_socket.bind((self.host, self.port))
-        
-        # TCP socket for file transfers
-        self.transfer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.transfer_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.transfer_socket.bind((self.host, self.port + 1))
-        self.transfer_socket.listen(5)
+        logger.debug("Setting up network sockets")
+        try:
+            # UDP socket for peer discovery
+            self.discovery_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.discovery_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            self.discovery_socket.bind((self.host, self.port))
+            logger.debug(f"Discovery socket bound to {self.host}:{self.port}")
+            
+            # TCP socket for file transfers
+            self.transfer_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.transfer_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.transfer_socket.bind((self.host, self.port + 1))
+            self.transfer_socket.listen(5)
+            logger.debug(f"Transfer socket bound to {self.host}:{self.port + 1}")
+        except Exception as e:
+            logger.error(f"Error setting up sockets: {e}")
+            raise
     
     def _start_threads(self):
         """Start background threads for peer discovery and file transfers"""
         self.discovery_thread = threading.Thread(target=self._discovery_loop)
         self.transfer_thread = threading.Thread(target=self._transfer_loop)
+        self.periodic_discovery_thread = threading.Thread(target=self._periodic_discovery)
+        
+        self.discovery_thread.daemon = True
+        self.transfer_thread.daemon = True
+        self.periodic_discovery_thread.daemon = True
         
         self.discovery_thread.start()
         self.transfer_thread.start()
+        self.periodic_discovery_thread.start()
     
     def stop(self):
         """Stop all background threads and close sockets"""
@@ -183,14 +193,28 @@ class P2PProtocol:
     # =========================================================================
     
     def discover_peers(self):
-        """Discover peers in the network by contacting bootstrap nodes"""
-        message = {'type': 'hello'}
+        logger.debug("Starting peer discovery")
+        message = {
+            'type': 'hello',
+            'host': self.host,
+            'port': self.port
+        }
+        
+        # Send to bootstrap nodes
         for node in self.bootstrap_nodes:
             try:
                 self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), node)
-                logger.info(f"Sent hello to bootstrap node {node}")
+                logger.debug(f"Sent hello to bootstrap node {node}")
             except Exception as e:
                 logger.error(f"Error connecting to bootstrap node {node}: {e}")
+        
+        # Broadcast to local network
+        try:
+            broadcast_addr = ('<broadcast>', self.port)
+            self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), broadcast_addr)
+            logger.debug("Broadcasted hello message")
+        except Exception as e:
+            logger.error(f"Error broadcasting: {e}")
     
     def _get_local_ip(self) -> str:
         """Get the actual local IP address of the machine."""
@@ -204,42 +228,50 @@ class P2PProtocol:
         except Exception:
             return "127.0.0.1"
     
-    def _handle_hello_message(self, addr: Tuple[str, int]):
-        """Handle a hello message from a new peer"""
+    def _handle_hello_message(self, addr: Tuple[str, int], message: dict):
+        logger.debug(f"Handling hello message from {addr}")
         # Don't add ourselves as a peer
         if addr[0] == self.host and addr[1] == self.port:
+            logger.debug("Ignoring hello from self")
             return
             
+        # Add the peer
         self.peers[addr] = time.time()
         logger.info(f"New peer discovered: {addr}")
         
         # Send response with our shared files
         response = {
             'type': 'hello_response',
+            'host': self.host,
+            'port': self.port,
             'files': {hash: info['name'] for hash, info in self.local_files.items()}
         }
-        self.discovery_socket.sendto(json.dumps(response).encode('utf-8'), addr)
-        
-        # Also send our own hello message to ensure bidirectional connection
-        hello_msg = {'type': 'hello'}
-        self.discovery_socket.sendto(json.dumps(hello_msg).encode('utf-8'), addr)
+        try:
+            self.discovery_socket.sendto(json.dumps(response).encode('utf-8'), addr)
+            logger.debug(f"Sent hello response to {addr}")
+        except Exception as e:
+            logger.error(f"Error sending hello response to {addr}: {e}")
     
     def _handle_hello_response(self, addr: Tuple[str, int], message: dict):
-        """Handle a hello response from a peer"""
+        logger.debug(f"Handling hello response from {addr}")
         # Don't add ourselves as a peer
         if addr[0] == self.host and addr[1] == self.port:
+            logger.debug("Ignoring hello response from self")
             return
             
+        # Add the peer
         self.peers[addr] = time.time()
         logger.info(f"Received hello response from: {addr}")
         
-        assert 'files' in message, "Hello response must include files"
-        for file_hash, file_name in message['files'].items():
-            if file_hash not in self.shared_files:
-                self.shared_files[file_hash] = {'peers': [], 'name': file_name}
-            if addr not in self.shared_files[file_hash]['peers']:
-                self.shared_files[file_hash]['peers'].append(addr)
-                logger.info(f"Added file {file_name} ({file_hash}) from peer {addr}")
+        # Update shared files
+        if 'files' in message:
+            logger.debug(f"Processing {len(message['files'])} files from {addr}")
+            for file_hash, file_name in message['files'].items():
+                if file_hash not in self.shared_files:
+                    self.shared_files[file_hash] = {'peers': [], 'name': file_name}
+                if addr not in self.shared_files[file_hash]['peers']:
+                    self.shared_files[file_hash]['peers'].append(addr)
+                    logger.info(f"Added file {file_name} ({file_hash}) from peer {addr}")
     
     def _handle_file_announcement(self, addr: Tuple[str, int], message: dict):
         """Handle a file announcement from a peer"""
@@ -272,30 +304,38 @@ class P2PProtocol:
                         del self.shared_files[file_hash]
     
     def _cleanup_peers(self):
-        """Remove inactive peers"""
         current_time = time.time()
-        inactive_threshold = 30  # Remove peers inactive for 30 seconds
+        inactive_threshold = 30
         
         peers_to_remove = []
         for peer, last_seen in self.peers.items():
             if current_time - last_seen > inactive_threshold:
                 peers_to_remove.append(peer)
+                logger.debug(f"Marking peer {peer} for removal (inactive for {current_time - last_seen:.1f} seconds)")
                 
         for peer in peers_to_remove:
             self._remove_peer(peer)
             logger.info(f"Removed inactive peer: {peer}")
     
+    def _periodic_discovery(self):
+        logger.debug("Starting periodic discovery")
+        while self.running:
+            self.discover_peers()
+            time.sleep(30)
+            logger.debug("Performing periodic peer discovery")
+    
     def _discovery_loop(self):
-        """Handle peer discovery messages"""
+        logger.debug("Starting discovery loop")
         while self.running:
             try:
                 data, addr = self.discovery_socket.recvfrom(1024)
                 message = json.loads(data.decode('utf-8'))
+                logger.debug(f"Received message from {addr}: {message['type']}")
                 
                 assert 'type' in message, "Message must have a type field"
                 
                 if message['type'] == 'hello':
-                    self._handle_hello_message(addr)
+                    self._handle_hello_message(addr, message)
                 elif message['type'] == 'hello_response':
                     self._handle_hello_response(addr, message)
                 elif message['type'] == 'announce_file':
@@ -315,13 +355,14 @@ class P2PProtocol:
     # =========================================================================
     
     def share_file(self, file_path: str) -> str:
-        """Share a file and return its hash"""
+        logger.debug(f"Sharing file: {file_path}")
         assert isinstance(file_path, str), "File path must be a string"
         assert os.path.exists(file_path), f"File not found: {file_path}"
         
         # Calculate file hash
         with open(file_path, 'rb') as f:
             file_hash = hashlib.sha256(f.read()).hexdigest()
+        logger.debug(f"File hash: {file_hash}")
         
         file_name = os.path.basename(file_path)
         self.local_files[file_hash] = {'path': file_path, 'name': file_name}
@@ -466,29 +507,28 @@ class P2PProtocol:
                 client_socket.sendall(data)
     
     def _announce_file(self, file_hash: str, file_name: str):
-        """Announce a file to all peers"""
-        assert isinstance(file_hash, str), "File hash must be a string"
-        assert isinstance(file_name, str), "File name must be a string"
-        
+        logger.debug(f"Announcing file {file_name} ({file_hash})")
         message = {
             'type': 'announce_file',
             'file_hash': file_hash,
-            'file_name': file_name
+            'file_name': file_name,
+            'host': self.host,
+            'port': self.port
         }
         
         # Announce to all peers
         for peer in self.peers:
             try:
                 self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), peer)
-                logger.info(f"Announced file {file_name} ({file_hash}) to peer {peer}")
+                logger.debug(f"Announced file to peer {peer}")
             except Exception as e:
                 logger.error(f"Error announcing file to peer {peer}: {e}")
         
         # Also announce to bootstrap nodes
         for node in self.bootstrap_nodes:
-            if node not in self.peers:  # Don't announce twice if node is also a peer
+            if node not in self.peers:
                 try:
                     self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), node)
-                    logger.info(f"Announced file {file_name} ({file_hash}) to bootstrap node {node}")
+                    logger.debug(f"Announced file to bootstrap node {node}")
                 except Exception as e:
                     logger.error(f"Error announcing file to bootstrap node {node}: {e}") 
