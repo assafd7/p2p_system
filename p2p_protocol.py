@@ -96,7 +96,7 @@ class P2PProtocol:
     # Initialization and Cleanup
     # =========================================================================
     
-    def __init__(self, host: str = '0.0.0.0', port: int = 9001, bootstrap_nodes: List[Tuple[str, int]] = None):
+    def __init__(self, host='0.0.0.0', port=9001, bootstrap_nodes: List[Tuple[str, int]] = None):
         """
         Initialize the P2P protocol.
         
@@ -110,11 +110,15 @@ class P2PProtocol:
         assert isinstance(port, int) and 1024 <= port <= 65535, "Port must be an integer between 1024 and 65535"
         assert bootstrap_nodes is None or isinstance(bootstrap_nodes, list), "Bootstrap nodes must be a list or None"
         
-        # Initialize instance variables
-        self.host = host
+        # Get the actual IP address if host is 0.0.0.0
+        if host == '0.0.0.0':
+            self.host = self._get_local_ip()
+        else:
+            self.host = host
+            
         self.port = port
         # Use the actual IP address for bootstrap nodes
-        self.bootstrap_nodes = bootstrap_nodes or [(host if host != '0.0.0.0' else '127.0.0.1', 9001)]
+        self.bootstrap_nodes = bootstrap_nodes or [(self.host, 9001)]
         self.peers: Dict[Tuple[str, int], float] = {}
         self.shared_files: Dict[str, Dict] = {}
         self.local_files: Dict[str, Dict] = {}
@@ -188,30 +192,24 @@ class P2PProtocol:
             except Exception as e:
                 logger.error(f"Error connecting to bootstrap node {node}: {e}")
     
-    def _discovery_loop(self):
-        """Handle peer discovery messages"""
-        while self.running:
-            try:
-                data, addr = self.discovery_socket.recvfrom(1024)
-                message = json.loads(data.decode('utf-8'))
-                
-                assert 'type' in message, "Message must have a type field"
-                
-                if message['type'] == 'hello':
-                    self._handle_hello_message(addr)
-                elif message['type'] == 'hello_response':
-                    self._handle_hello_response(addr, message)
-                elif message['type'] == 'announce_file':
-                    self._handle_file_announcement(addr, message)
-                elif message['type'] == 'goodbye':
-                    self._remove_peer(addr)
-                    logger.info(f"Peer {addr} has left the network")
-            
-            except Exception as e:
-                logger.error(f"Error in discovery loop: {e}")
+    def _get_local_ip(self) -> str:
+        """Get the actual local IP address of the machine."""
+        try:
+            # Create a temporary socket to get the local IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            return local_ip
+        except Exception:
+            return "127.0.0.1"
     
     def _handle_hello_message(self, addr: Tuple[str, int]):
         """Handle a hello message from a new peer"""
+        # Don't add ourselves as a peer
+        if addr[0] == self.host and addr[1] == self.port:
+            return
+            
         self.peers[addr] = time.time()
         logger.info(f"New peer discovered: {addr}")
         
@@ -228,6 +226,10 @@ class P2PProtocol:
     
     def _handle_hello_response(self, addr: Tuple[str, int], message: dict):
         """Handle a hello response from a peer"""
+        # Don't add ourselves as a peer
+        if addr[0] == self.host and addr[1] == self.port:
+            return
+            
         self.peers[addr] = time.time()
         logger.info(f"Received hello response from: {addr}")
         
@@ -268,6 +270,45 @@ class P2PProtocol:
                     # If no more peers have this file, remove it from shared files
                     if not self.shared_files[file_hash]['peers']:
                         del self.shared_files[file_hash]
+    
+    def _cleanup_peers(self):
+        """Remove inactive peers"""
+        current_time = time.time()
+        inactive_threshold = 30  # Remove peers inactive for 30 seconds
+        
+        peers_to_remove = []
+        for peer, last_seen in self.peers.items():
+            if current_time - last_seen > inactive_threshold:
+                peers_to_remove.append(peer)
+                
+        for peer in peers_to_remove:
+            self._remove_peer(peer)
+            logger.info(f"Removed inactive peer: {peer}")
+    
+    def _discovery_loop(self):
+        """Handle peer discovery messages"""
+        while self.running:
+            try:
+                data, addr = self.discovery_socket.recvfrom(1024)
+                message = json.loads(data.decode('utf-8'))
+                
+                assert 'type' in message, "Message must have a type field"
+                
+                if message['type'] == 'hello':
+                    self._handle_hello_message(addr)
+                elif message['type'] == 'hello_response':
+                    self._handle_hello_response(addr, message)
+                elif message['type'] == 'announce_file':
+                    self._handle_file_announcement(addr, message)
+                elif message['type'] == 'goodbye':
+                    self._remove_peer(addr)
+                    logger.info(f"Peer {addr} has left the network")
+                
+                # Cleanup inactive peers periodically
+                self._cleanup_peers()
+            
+            except Exception as e:
+                logger.error(f"Error in discovery loop: {e}")
     
     # =========================================================================
     # File Transfer and Management
@@ -435,6 +476,7 @@ class P2PProtocol:
             'file_name': file_name
         }
         
+        # Announce to all peers
         for peer in self.peers:
             try:
                 self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), peer)
@@ -444,8 +486,9 @@ class P2PProtocol:
         
         # Also announce to bootstrap nodes
         for node in self.bootstrap_nodes:
-            try:
-                self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), node)
-                logger.info(f"Announced file {file_name} ({file_hash}) to bootstrap node {node}")
-            except Exception as e:
-                logger.error(f"Error announcing file to bootstrap node {node}: {e}") 
+            if node not in self.peers:  # Don't announce twice if node is also a peer
+                try:
+                    self.discovery_socket.sendto(json.dumps(message).encode('utf-8'), node)
+                    logger.info(f"Announced file {file_name} ({file_hash}) to bootstrap node {node}")
+                except Exception as e:
+                    logger.error(f"Error announcing file to bootstrap node {node}: {e}") 
