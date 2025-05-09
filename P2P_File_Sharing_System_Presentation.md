@@ -3,6 +3,35 @@
 ## Overview
 The P2P File Sharing System is a decentralized file sharing application that allows users to share and download files directly between peers without relying on a central server for file storage. The system implements a custom P2P protocol for peer discovery and file transfers.
 
+## System Requirements and Installation
+
+### Requirements
+- Python 3.x installed on your system
+- Required Python packages (automatically installed via requirements.txt)
+
+### Installation Steps
+1. Install Python from [python.org](https://python.org) if not already installed
+2. Download or clone the project files
+3. Open a terminal/command prompt
+4. Navigate to the project directory
+5. Install required packages:
+   ```
+   pip install -r requirements.txt
+   ```
+
+### Running the System
+1. To run the system with default settings (localhost):
+   ```
+   python login_interface.py
+   ```
+
+2. To connect to a specific server:
+   ```
+   python login_interface.py <server_ip>
+   ```
+
+Note: No IDE is required to run the system. You only need Python installed and the command line/terminal.
+
 ## Key Features
 
 ### 1. User Authentication

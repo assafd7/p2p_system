@@ -7,6 +7,7 @@ import time
 import logging
 from pathlib import Path
 from typing import Dict, List, Tuple
+import logging.handlers
 
 # =============================================================================
 # Logging Configuration
@@ -22,9 +23,20 @@ def setup_logging():
     logger = logging.getLogger('p2p_protocol')
     logger.setLevel(logging.INFO)
     
+    # Remove any existing handlers to prevent duplicate logging
+    for handler in logger.handlers[:]:
+        logger.removeHandler(handler)
+    
     # Create handlers
     console_handler = logging.StreamHandler()
     file_handler = logging.FileHandler(log_dir / 'p2p.log')
+    
+    # Set log rotation to prevent huge log files
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_dir / 'p2p.log',
+        maxBytes=1024*1024,  # 1MB
+        backupCount=5
+    )
     
     # Create formatters and add it to handlers
     log_format = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
@@ -39,6 +51,36 @@ def setup_logging():
 
 # Initialize logger
 logger = setup_logging()
+
+# Add rate limiting for logging
+class RateLimitedLogger:
+    def __init__(self, logger, rate_limit_seconds=5):
+        self.logger = logger
+        self.rate_limit_seconds = rate_limit_seconds
+        self.last_log_time = {}
+    
+    def _should_log(self, message):
+        current_time = time.time()
+        if message not in self.last_log_time:
+            self.last_log_time[message] = current_time
+            return True
+        
+        if current_time - self.last_log_time[message] >= self.rate_limit_seconds:
+            self.last_log_time[message] = current_time
+            return True
+        
+        return False
+    
+    def info(self, message):
+        if self._should_log(message):
+            self.logger.info(message)
+    
+    def error(self, message):
+        if self._should_log(message):
+            self.logger.error(message)
+
+# Create rate-limited logger
+logger = RateLimitedLogger(logger)
 
 # =============================================================================
 # P2P Protocol Class
