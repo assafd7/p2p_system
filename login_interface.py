@@ -4,12 +4,14 @@ from tkinter import ttk, messagebox
 import json
 import socket
 import threading
+import sys
+from config import SERVER_HOST, SERVER_PORT
 # Assume main_app.py is in the same directory and contains MainApplication
 import main_app
 
 
 class LoginInterface:
-    def __init__(self, root_prm, host='127.0.0.1', port=9000):
+    def __init__(self, root_prm, host=SERVER_HOST, port=SERVER_PORT):
         self.root = root_prm
         print(root_prm)
         self.host = host
@@ -243,8 +245,7 @@ class LoginInterface:
 if __name__ == "__main__":
     root = tk.Tk()
     # Get the server IP from command line or use default
-    import sys
-    server_ip = '127.0.0.1'  # Default to localhost
+    server_ip = SERVER_HOST  # Default to localhost
     if len(sys.argv) > 1:
         server_ip = sys.argv[1]
     app = LoginInterface(root, host=server_ip)

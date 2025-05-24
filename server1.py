@@ -3,12 +3,13 @@ import threading
 import json
 from database_manager import DatabaseManager
 from login_interface import LoginInterface
+from config import SERVER_HOST, SERVER_PORT, DATABASE_NAME
 
 
 class P2PServer:
     """Manages the P2P server operations including client connections and request handling."""
     
-    def __init__(self, host='0.0.0.0', port=9000, db_name='p2p_system.db'):
+    def __init__(self, host=SERVER_HOST, port=SERVER_PORT, db_name=DATABASE_NAME):
         self.host = host
         self.port = port
         self.db_manager = DatabaseManager(db_name)

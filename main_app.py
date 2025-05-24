@@ -3,6 +3,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 from files_index import FileListComponent
 from p2p_protocol import P2PProtocol
+from config import P2P_HOST, P2P_PORT
 import os
 import threading
 
@@ -14,7 +15,7 @@ class MainApplication:
         self.root.geometry("800x600")
         
         # Initialize P2P protocol
-        self.p2p = P2PProtocol(host='0.0.0.0', port=9001)
+        self.p2p = P2PProtocol(host=P2P_HOST, port=P2P_PORT)
         
         # Create menu bar
         self.menu_bar = tk.Menu(root)
