@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Tuple
 import logging.handlers
-from config import P2P_HOST, P2P_PORT
+from config import get_p2p_address, get_transfer_address, BOOTSTRAP_NODES
 
 # =============================================================================
 # Logging Configuration
@@ -98,7 +98,11 @@ class P2PProtocol:
     # Initialization and Cleanup
     # =========================================================================
     
-    def __init__(self, host=P2P_HOST, port=P2P_PORT, bootstrap_nodes: List[Tuple[str, int]] = None):
+    def __init__(self, host=None, port=None, bootstrap_nodes=None):
+        # Use configuration values if not specified
+        if host is None or port is None:
+            host, port = get_p2p_address()
+        
         logger.debug(f"Initializing P2P Protocol with host={host}, port={port}, bootstrap_nodes={bootstrap_nodes}")
         
         # Input validation
@@ -114,7 +118,7 @@ class P2PProtocol:
             self.host = host
             
         self.port = port
-        self.bootstrap_nodes = bootstrap_nodes or []
+        self.bootstrap_nodes = bootstrap_nodes or BOOTSTRAP_NODES
         logger.debug(f"Using bootstrap nodes: {self.bootstrap_nodes}")
         
         self.peers: Dict[Tuple[str, int], float] = {}

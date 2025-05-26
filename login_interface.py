@@ -4,17 +4,16 @@ from tkinter import ttk, messagebox
 import json
 import socket
 import threading
-import sys
-from config import SERVER_HOST, SERVER_PORT
 # Assume main_app.py is in the same directory and contains MainApplication
 import main_app
+from config import get_server_address
 
 
 class LoginInterface:
-    def __init__(self, root_prm, host=SERVER_HOST, port=SERVER_PORT):
+    def __init__(self, root_prm):
         self.root = root_prm
-        self.host = host
-        self.port = port
+        print(root_prm)
+        self.host, self.port = get_server_address()
         self.client_socket = None
 
         # Set window properties
@@ -115,28 +114,13 @@ class LoginInterface:
         self.register_status.pack(pady=10)
 
     def connect_to_server(self):
-        """Connect to the server with better error handling"""
         try:
             self.client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.client_socket.settimeout(5)  # Set a timeout for connection attempts
             self.client_socket.connect((self.host, self.port))
             self.status_var.set(f"Connected to server at {self.host}:{self.port}")
-            print(f"Successfully connected to server at {self.host}:{self.port}")
-        except socket.timeout:
-            error_msg = f"Connection timed out. Could not connect to server at {self.host}:{self.port}"
-            self.status_var.set(error_msg)
-            messagebox.showerror("Connection Error", error_msg)
-            print(error_msg)
-        except ConnectionRefusedError:
-            error_msg = f"Connection refused. Server at {self.host}:{self.port} is not running or not accessible."
-            self.status_var.set(error_msg)
-            messagebox.showerror("Connection Error", error_msg)
-            print(error_msg)
         except Exception as e:
-            error_msg = f"Failed to connect: {str(e)}"
-            self.status_var.set(error_msg)
-            messagebox.showerror("Connection Error", error_msg)
-            print(error_msg)
+            self.status_var.set(f"Failed to connect: {str(e)}")
+            messagebox.showerror("Connection Error", f"Could not connect to server: {str(e)}")
 
     def send_request(self, request):
         if not self.client_socket:
@@ -258,17 +242,14 @@ class LoginInterface:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    # Get the server IP from command line or use default
-    server_ip = SERVER_HOST  # Default to configured host
-    if len(sys.argv) > 1:
-        server_ip = sys.argv[1]
-    print(f"Attempting to connect to server at {server_ip}:{SERVER_PORT}")
-    app = LoginInterface(root, host=server_ip)
+    app = LoginInterface(root)
+
 
     # Handle window close
     def on_closing():
         app.close()
         root.destroy()
+
 
     root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
