@@ -11,7 +11,7 @@ import logging.handlers
 from config import get_p2p_address, get_transfer_address, BOOTSTRAP_NODES
 
 # =============================================================================
-# Logging Configuration
+# Logging Configuration, 18:53
 # =============================================================================
 
 def setup_logging():
@@ -398,10 +398,14 @@ class P2PProtocol:
         last_error = None
         for peer in peers:
             try:
+                logger.info(f"Attempting to download from peer {peer}")
                 return self._download_from_peer(peer, file_hash, save_as)
             except Exception as e:
                 last_error = e
                 logger.error(f"Failed to download from peer {peer}: {e}")
+                # Remove the failed peer from the list
+                if peer in self.peers:
+                    self._remove_peer(peer)
         
         raise Exception(f"Failed to download file from any peer: {last_error}")
     
@@ -410,11 +414,15 @@ class P2PProtocol:
         assert isinstance(peer, tuple) and len(peer) == 2, "Peer must be a tuple of (host, port)"
         assert isinstance(file_hash, str), "File hash must be a string"
         
-        # Create a TCP connection to the peer
+        # Create a TCP connection to the peer with timeout
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.connect(peer)
+        sock.settimeout(10)  # 10 second timeout for connection and operations
         
         try:
+            # Try to connect to the peer
+            logger.debug(f"Attempting to connect to peer {peer}")
+            sock.connect(peer)
+            
             # Send file request
             request = {
                 'type': 'file_request',
@@ -422,8 +430,12 @@ class P2PProtocol:
             }
             sock.sendall(json.dumps(request).encode('utf-8'))
             
-            # Receive file data
-            response = json.loads(sock.recv(1024).decode('utf-8'))
+            # Receive initial response with timeout
+            response_data = sock.recv(1024)
+            if not response_data:
+                raise Exception("No response received from peer")
+                
+            response = json.loads(response_data.decode('utf-8'))
             if response['type'] != 'file_data':
                 raise Exception(f"Unexpected response type: {response['type']}")
             
@@ -436,13 +448,22 @@ class P2PProtocol:
                 save_as = self.shared_files[file_hash]['name']
             save_path = os.path.join(save_dir, save_as)
             
-            # Receive and save file
+            # Receive and save file with progress tracking
+            total_bytes = 0
             with open(save_path, 'wb') as f:
                 while True:
-                    data = sock.recv(8192)
-                    if not data:
-                        break
-                    f.write(data)
+                    try:
+                        data = sock.recv(8192)
+                        if not data:
+                            break
+                        f.write(data)
+                        total_bytes += len(data)
+                        logger.debug(f"Downloaded {total_bytes} bytes from {peer}")
+                    except socket.timeout:
+                        raise Exception("Timeout while receiving file data")
+            
+            if total_bytes == 0:
+                raise Exception("No data received from peer")
             
             # Verify file hash
             with open(save_path, 'rb') as f:
@@ -452,10 +473,20 @@ class P2PProtocol:
                 os.remove(save_path)
                 raise Exception("File hash verification failed")
             
+            logger.info(f"Successfully downloaded file from {peer}")
             return save_path
             
+        except socket.timeout:
+            raise Exception(f"Connection to peer {peer} timed out")
+        except ConnectionRefusedError:
+            raise Exception(f"Connection to peer {peer} was refused")
+        except Exception as e:
+            raise Exception(f"Error downloading from peer {peer}: {str(e)}")
         finally:
-            sock.close()
+            try:
+                sock.close()
+            except:
+                pass
     
     def _transfer_loop(self):
         """Handle incoming file transfer requests"""
@@ -493,23 +524,37 @@ class P2PProtocol:
         """Handle a file request from a peer"""
         assert 'file_hash' in request, "File request must include file_hash"
         
-        file_hash = request['file_hash']
-        if file_hash not in self.local_files:
-            response = {'type': 'error', 'message': 'File not found'}
+        try:
+            file_hash = request['file_hash']
+            if file_hash not in self.local_files:
+                response = {'type': 'error', 'message': 'File not found'}
+                client_socket.sendall(json.dumps(response).encode('utf-8'))
+                return
+            
+            # Send file data response
+            response = {'type': 'file_data'}
             client_socket.sendall(json.dumps(response).encode('utf-8'))
-            return
-        
-        # Send file data response
-        response = {'type': 'file_data'}
-        client_socket.sendall(json.dumps(response).encode('utf-8'))
-        
-        # Send file contents
-        with open(self.local_files[file_hash]['path'], 'rb') as f:
-            while True:
-                data = f.read(8192)
-                if not data:
-                    break
-                client_socket.sendall(data)
+            
+            # Send file contents with progress tracking
+            total_bytes = 0
+            with open(self.local_files[file_hash]['path'], 'rb') as f:
+                while True:
+                    data = f.read(8192)
+                    if not data:
+                        break
+                    client_socket.sendall(data)
+                    total_bytes += len(data)
+                    logger.debug(f"Sent {total_bytes} bytes to {addr}")
+            
+            logger.info(f"Successfully sent file to {addr}")
+            
+        except Exception as e:
+            logger.error(f"Error handling file request from {addr}: {e}")
+            try:
+                response = {'type': 'error', 'message': str(e)}
+                client_socket.sendall(json.dumps(response).encode('utf-8'))
+            except:
+                pass
     
     def _announce_file(self, file_hash: str, file_name: str):
         logger.debug(f"Announcing file {file_name} ({file_hash})")
