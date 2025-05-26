@@ -301,12 +301,17 @@ class P2PProtocol:
         if peer in self.peers:
             del self.peers[peer]
             # Remove peer from shared files
-            for file_hash in self.shared_files:
-                if peer in self.shared_files[file_hash]['peers']:
-                    self.shared_files[file_hash]['peers'].remove(peer)
-                    # If no more peers have this file, remove it from shared files
-                    if not self.shared_files[file_hash]['peers']:
-                        del self.shared_files[file_hash]
+            files_to_remove = []  # Keep track of files to remove
+            for file_hash, file_info in self.shared_files.items():
+                if peer in file_info['peers']:
+                    file_info['peers'].remove(peer)
+                    # If no more peers have this file, mark it for removal
+                    if not file_info['peers']:
+                        files_to_remove.append(file_hash)
+            
+            # Remove files with no peers after iteration is complete
+            for file_hash in files_to_remove:
+                del self.shared_files[file_hash]
     
     def _cleanup_peers(self):
         current_time = time.time()
