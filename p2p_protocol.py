@@ -410,7 +410,9 @@ class P2PProtocol:
             except Exception as e:
                 last_error = e
                 logger.error(f"Failed to download from peer {peer}: {e}")
-                failed_peers.append(peer)  # Add to failed peers list
+                # Only add to failed peers if it's a permanent error
+                if not isinstance(e, socket.timeout):
+                    failed_peers.append(peer)
         
         # Remove failed peers after iteration is complete
         for peer in failed_peers:
@@ -419,84 +421,98 @@ class P2PProtocol:
         
         raise Exception(f"Failed to download file from any peer: {last_error}")
     
-    def _download_from_peer(self, peer: Tuple[str, int], file_hash: str, save_as: str = None) -> str:
+    def _download_from_peer(self, peer: Tuple[str, int], file_hash: str, save_as: str = None, max_retries: int = 2) -> str:
         """Download a file from a specific peer"""
         assert isinstance(peer, tuple) and len(peer) == 2, "Peer must be a tuple of (host, port)"
         assert isinstance(file_hash, str), "File hash must be a string"
         
-        # Create a TCP connection to the peer with timeout
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(10)  # 10 second timeout for connection and operations
-        
-        try:
-            # Try to connect to the peer
-            logger.debug(f"Attempting to connect to peer {peer}")
-            sock.connect(peer)
-            
-            # Send file request
-            request = {
-                'type': 'file_request',
-                'file_hash': file_hash
-            }
-            sock.sendall(json.dumps(request).encode('utf-8'))
-            
-            # Receive initial response with timeout
-            response_data = sock.recv(1024)
-            if not response_data:
-                raise Exception("No response received from peer")
-                
-            response = json.loads(response_data.decode('utf-8'))
-            if response['type'] != 'file_data':
-                raise Exception(f"Unexpected response type: {response['type']}")
-            
-            # Create save directory if it doesn't exist
-            save_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'P2P_Files')
-            os.makedirs(save_dir, exist_ok=True)
-            
-            # Determine save path
-            if save_as is None:
-                save_as = self.shared_files[file_hash]['name']
-            save_path = os.path.join(save_dir, save_as)
-            
-            # Receive and save file with progress tracking
-            total_bytes = 0
-            with open(save_path, 'wb') as f:
-                while True:
-                    try:
-                        data = sock.recv(8192)
-                        if not data:
-                            break
-                        f.write(data)
-                        total_bytes += len(data)
-                        logger.debug(f"Downloaded {total_bytes} bytes from {peer}")
-                    except socket.timeout:
-                        raise Exception("Timeout while receiving file data")
-            
-            if total_bytes == 0:
-                raise Exception("No data received from peer")
-            
-            # Verify file hash
-            with open(save_path, 'rb') as f:
-                received_hash = hashlib.sha256(f.read()).hexdigest()
-            
-            if received_hash != file_hash:
-                os.remove(save_path)
-                raise Exception("File hash verification failed")
-            
-            logger.info(f"Successfully downloaded file from {peer}")
-            return save_path
-            
-        except socket.timeout:
-            raise Exception(f"Connection to peer {peer} timed out")
-        except ConnectionRefusedError:
-            raise Exception(f"Connection to peer {peer} was refused")
-        except Exception as e:
-            raise Exception(f"Error downloading from peer {peer}: {str(e)}")
-        finally:
+        last_error = None
+        for attempt in range(max_retries + 1):
             try:
-                sock.close()
-            except:
-                pass
+                # Create a TCP connection to the peer with timeout
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(30)  # Increased timeout to 30 seconds
+                
+                # Try to connect to the peer
+                logger.debug(f"Attempting to connect to peer {peer} (attempt {attempt + 1}/{max_retries + 1})")
+                sock.connect(peer)
+                
+                # Send file request
+                request = {
+                    'type': 'file_request',
+                    'file_hash': file_hash
+                }
+                sock.sendall(json.dumps(request).encode('utf-8'))
+                
+                # Receive initial response with timeout
+                response_data = sock.recv(1024)
+                if not response_data:
+                    raise Exception("No response received from peer")
+                    
+                response = json.loads(response_data.decode('utf-8'))
+                if response['type'] != 'file_data':
+                    raise Exception(f"Unexpected response type: {response['type']}")
+                
+                # Create save directory if it doesn't exist
+                save_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'P2P_Files')
+                os.makedirs(save_dir, exist_ok=True)
+                
+                # Determine save path
+                if save_as is None:
+                    save_as = self.shared_files[file_hash]['name']
+                save_path = os.path.join(save_dir, save_as)
+                
+                # Receive and save file with progress tracking
+                total_bytes = 0
+                with open(save_path, 'wb') as f:
+                    while True:
+                        try:
+                            data = sock.recv(8192)
+                            if not data:
+                                break
+                            f.write(data)
+                            total_bytes += len(data)
+                            logger.debug(f"Downloaded {total_bytes} bytes from {peer}")
+                        except socket.timeout:
+                            if total_bytes == 0:
+                                raise Exception("Timeout while receiving file data")
+                            # If we've received some data, continue
+                            continue
+                
+                if total_bytes == 0:
+                    raise Exception("No data received from peer")
+                
+                # Verify file hash
+                with open(save_path, 'rb') as f:
+                    received_hash = hashlib.sha256(f.read()).hexdigest()
+                
+                if received_hash != file_hash:
+                    os.remove(save_path)
+                    raise Exception("File hash verification failed")
+                
+                logger.info(f"Successfully downloaded file from {peer}")
+                return save_path
+                
+            except socket.timeout:
+                last_error = Exception(f"Connection to peer {peer} timed out")
+                logger.warning(f"Timeout on attempt {attempt + 1}/{max_retries + 1} for peer {peer}")
+                if attempt < max_retries:
+                    time.sleep(1)  # Wait a bit before retrying
+                    continue
+            except ConnectionRefusedError:
+                last_error = Exception(f"Connection to peer {peer} was refused")
+                break  # Don't retry on connection refused
+            except Exception as e:
+                last_error = e
+                logger.error(f"Error downloading from peer {peer}: {e}")
+                break  # Don't retry on other errors
+            finally:
+                try:
+                    sock.close()
+                except:
+                    pass
+        
+        raise last_error
     
     def _transfer_loop(self):
         """Handle incoming file transfer requests"""
@@ -552,9 +568,15 @@ class P2PProtocol:
                     data = f.read(8192)
                     if not data:
                         break
-                    client_socket.sendall(data)
-                    total_bytes += len(data)
-                    logger.debug(f"Sent {total_bytes} bytes to {addr}")
+                    try:
+                        client_socket.sendall(data)
+                        total_bytes += len(data)
+                        logger.debug(f"Sent {total_bytes} bytes to {addr}")
+                    except socket.timeout:
+                        # If we've sent some data, continue
+                        if total_bytes > 0:
+                            continue
+                        raise
             
             logger.info(f"Successfully sent file to {addr}")
             
