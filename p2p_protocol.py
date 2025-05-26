@@ -77,6 +77,10 @@ class RateLimitedLogger:
         if self._should_log(message):
             self.logger.info(message)
     
+    def warning(self, message):
+        if self._should_log(message):
+            self.logger.warning(message)
+    
     def error(self, message):
         if self._should_log(message):
             self.logger.error(message)
@@ -495,7 +499,7 @@ class P2PProtocol:
                 
             except socket.timeout:
                 last_error = Exception(f"Connection to peer {peer} timed out")
-                logger.warning(f"Timeout on attempt {attempt + 1}/{max_retries + 1} for peer {peer}")
+                logger.error(f"Timeout on attempt {attempt + 1}/{max_retries + 1} for peer {peer}")
                 if attempt < max_retries:
                     time.sleep(1)  # Wait a bit before retrying
                     continue
