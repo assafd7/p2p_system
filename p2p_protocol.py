@@ -11,7 +11,7 @@ import logging.handlers
 from config import get_p2p_address, get_transfer_address, BOOTSTRAP_NODES
 
 # =============================================================================
-# Logging Configuration, 18:53
+# Logging Configuration, 19"02
 # =============================================================================
 
 def setup_logging():
@@ -390,12 +390,14 @@ class P2PProtocol:
         assert file_hash in self.shared_files, f"File with hash {file_hash} not found in network"
         
         # Get list of peers that have this file
-        peers = self.shared_files[file_hash]['peers']
+        peers = list(self.shared_files[file_hash]['peers'])  # Create a copy of the peers list
         if not peers:
             raise Exception("No peers available with this file")
         
         # Try to download from each peer until successful
         last_error = None
+        failed_peers = []  # Keep track of failed peers
+        
         for peer in peers:
             try:
                 logger.info(f"Attempting to download from peer {peer}")
@@ -403,9 +405,12 @@ class P2PProtocol:
             except Exception as e:
                 last_error = e
                 logger.error(f"Failed to download from peer {peer}: {e}")
-                # Remove the failed peer from the list
-                if peer in self.peers:
-                    self._remove_peer(peer)
+                failed_peers.append(peer)  # Add to failed peers list
+        
+        # Remove failed peers after iteration is complete
+        for peer in failed_peers:
+            if peer in self.peers:
+                self._remove_peer(peer)
         
         raise Exception(f"Failed to download file from any peer: {last_error}")
     
