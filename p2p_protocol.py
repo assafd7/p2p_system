@@ -129,6 +129,7 @@ class P2PProtocol:
         self.shared_files: Dict[str, Dict] = {}
         self.local_files: Dict[str, Dict] = {}
         self.running = True
+        self.current_download = None  # Track current download for cancellation
         
         # Set up network sockets
         self._setup_sockets()
@@ -393,7 +394,13 @@ class P2PProtocol:
         logger.info(f"Shared file {file_name} ({file_hash})")
         return file_hash
     
-    def request_file(self, file_hash: str, save_as: str = None) -> str:
+    def cancel_download(self):
+        """Cancel the current download"""
+        if self.current_download:
+            self.current_download['cancelled'] = True
+            logger.info("Download cancelled by user")
+
+    def request_file(self, file_hash: str, save_as: str = None, progress_callback=None) -> str:
         """Request a file from the network and return the path where it was saved"""
         assert isinstance(file_hash, str), "File hash must be a string"
         assert file_hash in self.shared_files, f"File with hash {file_hash} not found in network"
@@ -410,7 +417,7 @@ class P2PProtocol:
         for peer in peers:
             try:
                 logger.info(f"Attempting to download from peer {peer}")
-                return self._download_from_peer(peer, file_hash, save_as)
+                return self._download_from_peer(peer, file_hash, save_as, progress_callback)
             except Exception as e:
                 last_error = e
                 logger.error(f"Failed to download from peer {peer}: {e}")
@@ -425,10 +432,18 @@ class P2PProtocol:
         
         raise Exception(f"Failed to download file from any peer: {last_error}")
     
-    def _download_from_peer(self, peer: Tuple[str, int], file_hash: str, save_as: str = None, max_retries: int = 2) -> str:
+    def _download_from_peer(self, peer: Tuple[str, int], file_hash: str, save_as: str = None, 
+                          progress_callback=None, max_retries: int = 2) -> str:
         """Download a file from a specific peer"""
         assert isinstance(peer, tuple) and len(peer) == 2, "Peer must be a tuple of (host, port)"
         assert isinstance(file_hash, str), "File hash must be a string"
+        
+        # Set up download tracking
+        self.current_download = {
+            'cancelled': False,
+            'peer': peer,
+            'file_hash': file_hash
+        }
         
         last_error = None
         for attempt in range(max_retries + 1):
@@ -457,6 +472,11 @@ class P2PProtocol:
                 if response['type'] != 'file_data':
                     raise Exception(f"Unexpected response type: {response['type']}")
                 
+                # Get file size if available
+                total_bytes = response.get('file_size', 0)
+                if progress_callback:
+                    progress_callback(0, total_bytes)
+                
                 # Create save directory if it doesn't exist
                 save_dir = os.path.join(os.path.expanduser('~'), 'Downloads', 'P2P_Files')
                 os.makedirs(save_dir, exist_ok=True)
@@ -467,23 +487,30 @@ class P2PProtocol:
                 save_path = os.path.join(save_dir, save_as)
                 
                 # Receive and save file with progress tracking
-                total_bytes = 0
+                bytes_received = 0
                 with open(save_path, 'wb') as f:
                     while True:
                         try:
                             data = sock.recv(8192)
                             if not data:
                                 break
+                            
+                            # Check for cancellation
+                            if self.current_download['cancelled']:
+                                raise Exception("Download cancelled by user")
+                            
                             f.write(data)
-                            total_bytes += len(data)
-                            logger.debug(f"Downloaded {total_bytes} bytes from {peer}")
+                            bytes_received += len(data)
+                            if progress_callback:
+                                progress_callback(bytes_received, total_bytes)
+                            logger.debug(f"Downloaded {bytes_received} bytes from {peer}")
                         except socket.timeout:
-                            if total_bytes == 0:
+                            if bytes_received == 0:
                                 raise Exception("Timeout while receiving file data")
                             # If we've received some data, continue
                             continue
                 
-                if total_bytes == 0:
+                if bytes_received == 0:
                     raise Exception("No data received from peer")
                 
                 # Verify file hash
@@ -516,6 +543,8 @@ class P2PProtocol:
                 except:
                     pass
         
+        # Clear current download
+        self.current_download = None
         raise last_error
     
     def _transfer_loop(self):
@@ -561,8 +590,14 @@ class P2PProtocol:
                 client_socket.sendall(json.dumps(response).encode('utf-8'))
                 return
             
-            # Send file data response
-            response = {'type': 'file_data'}
+            # Get file size
+            file_size = os.path.getsize(self.local_files[file_hash]['path'])
+            
+            # Send file data response with size
+            response = {
+                'type': 'file_data',
+                'file_size': file_size
+            }
             client_socket.sendall(json.dumps(response).encode('utf-8'))
             
             # Send file contents with progress tracking

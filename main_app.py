@@ -154,12 +154,70 @@ class MainApplication:
         )
         
         if save_path:
-            try:
-                save_name = os.path.basename(save_path)
-                file_path = self.p2p.request_file(file_hash, save_name)
-                messagebox.showinfo("Success", f"File downloaded successfully!\nSaved as: {file_path}")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to download file: {str(e)}")
+            # Create loading window
+            loading_window = tk.Toplevel(self.root)
+            loading_window.title("Downloading File")
+            loading_window.geometry("400x200")
+            loading_window.transient(self.root)  # Make it stay on top of main window
+            loading_window.grab_set()  # Make it modal
+            
+            # Center the window
+            loading_window.update_idletasks()
+            width = loading_window.winfo_width()
+            height = loading_window.winfo_height()
+            x = (loading_window.winfo_screenwidth() // 2) - (width // 2)
+            y = (loading_window.winfo_screenheight() // 2) - (height // 2)
+            loading_window.geometry(f'{width}x{height}+{x}+{y}')
+            
+            # Create progress frame
+            progress_frame = ttk.Frame(loading_window, padding="20")
+            progress_frame.pack(fill=tk.BOTH, expand=True)
+            
+            # File name label
+            ttk.Label(progress_frame, text=f"Downloading: {original_name}").pack(pady=(0, 10))
+            
+            # Progress bar
+            progress_var = tk.DoubleVar()
+            progress_bar = ttk.Progressbar(progress_frame, variable=progress_var, maximum=100)
+            progress_bar.pack(fill=tk.X, pady=10)
+            
+            # Status label
+            status_var = tk.StringVar(value="Connecting to peer...")
+            status_label = ttk.Label(progress_frame, textvariable=status_var)
+            status_label.pack(pady=5)
+            
+            # Cancel button
+            cancel_button = ttk.Button(progress_frame, text="Cancel", 
+                                     command=lambda: self._cancel_download(loading_window))
+            cancel_button.pack(pady=10)
+            
+            def update_progress(bytes_received, total_bytes):
+                if total_bytes > 0:
+                    progress = (bytes_received / total_bytes) * 100
+                    progress_var.set(progress)
+                    status_var.set(f"Downloading: {bytes_received:,} / {total_bytes:,} bytes")
+                else:
+                    status_var.set(f"Downloading: {bytes_received:,} bytes")
+                loading_window.update()
+            
+            def download_thread():
+                try:
+                    save_name = os.path.basename(save_path)
+                    file_path = self.p2p.request_file(file_hash, save_name, progress_callback=update_progress)
+                    loading_window.destroy()
+                    messagebox.showinfo("Success", f"File downloaded successfully!\nSaved as: {file_path}")
+                except Exception as e:
+                    loading_window.destroy()
+                    messagebox.showerror("Error", f"Failed to download file: {str(e)}")
+            
+            # Start download in a separate thread
+            threading.Thread(target=download_thread, daemon=True).start()
+    
+    def _cancel_download(self, loading_window):
+        """Cancel the current download"""
+        self.p2p.cancel_download()
+        loading_window.destroy()
+        messagebox.showinfo("Download Cancelled", "The download has been cancelled.")
 
     def search_files(self):
         """Handle file search"""
